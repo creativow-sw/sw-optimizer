@@ -34,6 +34,18 @@ NOMBRE_SET = {
 }
 ELEMENTOS = {1: "Water", 2: "Fire", 3: "Wind", 4: "Light", 5: "Dark"}
 
+# Bonos de set que suben stats del propio monstruo: (piezas, stat, valor)
+BONO_SET = {
+    1: (2, "HP%", 15),
+    2: (2, "DEF%", 15),
+    3: (4, "SPD%", 25),
+    4: (2, "CR", 12),
+    5: (4, "CD", 40),
+    6: (2, "ACC", 20),
+    7: (2, "RES", 20),
+    8: (4, "ATK%", 35),
+}
+
 
 def cantidad(x):
     return len(x) if x else 0
@@ -72,6 +84,59 @@ def resumen_runa(r):
     texto += " [" + ", ".join(subs) + "]"
     texto += " ef" + str(eficiencia(r)) + "%"
     return texto
+
+
+def stats_finales(u, runas):
+    base = {
+        "HP": u.get("con", 0) * 15,
+        "ATK": u.get("atk", 0),
+        "DEF": u.get("def", 0),
+        "SPD": u.get("spd", 0),
+        "CR": u.get("critical_rate", 0),
+        "CD": u.get("critical_damage", 0),
+        "RES": u.get("resist", 0),
+        "ACC": u.get("accuracy", 0),
+    }
+    plano = {k: 0 for k in base}
+    pct = {"HP": 0, "ATK": 0, "DEF": 0, "SPD": 0}
+
+    def sumar(stat_id, valor):
+        nombre = NOMBRE_STAT.get(stat_id)
+        if nombre is None:
+            return
+        if nombre in ("HP%", "ATK%", "DEF%"):
+            pct[nombre[:-1]] += valor
+        else:
+            plano[nombre] += valor
+
+    for r in runas:
+        pri = r.get("pri_eff") or [0, 0]
+        sumar(pri[0], pri[1])
+        innato = r.get("prefix_eff") or [0, 0]
+        if innato and innato[0]:
+            sumar(innato[0], innato[1])
+        for s in r.get("sec_eff") or []:
+            molienda = s[3] if len(s) > 3 else 0
+            sumar(s[0], s[1] + molienda)
+
+    conteo_ids = Counter(r.get("set_id") for r in runas)
+    for sid, n in conteo_ids.items():
+        if sid in BONO_SET:
+            piezas, stat, valor = BONO_SET[sid]
+            veces = n // piezas
+            if stat.endswith("%"):
+                pct[stat[:-1]] += valor * veces
+            else:
+                plano[stat] += valor * veces
+
+    total = {}
+    for k in base:
+        if k in pct:
+            total[k] = round(base[k] * (1 + pct[k] / 100) + plano[k])
+        else:
+            total[k] = round(base[k] + plano[k])
+    total["EHP"] = round(total["HP"] * (1 + 3.5 * total["DEF"] / 1140))
+    return total
 
 
 @st.cache_data(ttl=60 * 60 * 24 * 7, show_spinner="Cargando nombres de monstruos...")
@@ -140,21 +205,17 @@ for u in unidades:
     )
     sets_txt = " ".join(k + "x" + str(v) for k, v in conteo.items())
 
-    base = (
-        "HP " + str(u.get("con", 0) * 15)
-        + " ATK " + str(u.get("atk", 0))
-        + " DEF " + str(u.get("def", 0))
-        + " SPD " + str(u.get("spd", 0))
-        + " CR " + str(u.get("critical_rate", 0))
-        + " CD " + str(u.get("critical_damage", 0))
-        + " RES " + str(u.get("resist", 0))
-        + " ACC " + str(u.get("accuracy", 0))
+    f = stats_finales(u, runas)
+    finales = (
+        "HP " + str(f["HP"]) + " ATK " + str(f["ATK"]) + " DEF " + str(f["DEF"])
+        + " SPD " + str(f["SPD"]) + " CR " + str(f["CR"]) + " CD " + str(f["CD"])
+        + " RES " + str(f["RES"]) + " ACC " + str(f["ACC"]) + " EHP " + str(f["EHP"])
     )
 
     cabecera = (
         nombre + " (" + elemento + ", " + str(u.get("class")) + "*)"
         + " id" + str(u.get("unit_id"))
-        + " | base: " + base
+        + " | finales: " + finales
         + " | sets: " + sets_txt
         + " | artefactos: " + str(cantidad(u.get("artifacts")))
     )
@@ -164,9 +225,16 @@ for u in unidades:
     filas.append({
         "Monstruo": nombre,
         "Elemento": elemento,
-        "Estrellas": u.get("class"),
-        "Runas equipadas": len(runas),
+        "Runas": len(runas),
         "Sets": sets_txt,
+        "SPD": f["SPD"],
+        "HP": f["HP"],
+        "DEF": f["DEF"],
+        "EHP": f["EHP"],
+        "CR": f["CR"],
+        "CD": f["CD"],
+        "RES": f["RES"],
+        "ACC": f["ACC"],
     })
 
 libres = [r for r in runas_libres if r.get("class", 0) % 10 == 6]
@@ -189,4 +257,7 @@ st.dataframe(pd.DataFrame(filas), use_container_width=True, hide_index=True)
 with st.expander("Ver el texto completo del resumen"):
     st.code(texto_final, language=None)
 
-st.caption("Todavía no se envía nada a OpenAI.")
+st.caption(
+    "Stats finales = base + runas + bonos de set propios. "
+    "No incluyen torres, totem ni líder. Todavía no se envía nada a OpenAI."
+)
