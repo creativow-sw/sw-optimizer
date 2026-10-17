@@ -261,3 +261,81 @@ st.caption(
     "Stats finales = base + runas + bonos de set propios. "
     "No incluyen torres, totem ni líder. Todavía no se envía nada a OpenAI."
 )
+
+
+
+# ---------- Análisis con ChatGPT ----------
+import re
+from openai import OpenAI
+
+st.header("Análisis del entrenador (ChatGPT)")
+
+modelo = st.text_input("Modelo de OpenAI", value="gpt-5.4-mini")
+usar_web = st.checkbox(
+    "Buscar el meta actual en internet (cuesta un poco más)", value=True
+)
+
+INSTRUCCIONES = """
+Eres un entrenador experto de Summoners War (nivel profesional, RTA y Rift Raid R5).
+Recibirás el inventario de UN jugador: sus monstruos con stats finales (sin torres,
+líder ni artefactos), las runas equipadas con su eficiencia y sus mejores runas libres.
+
+Reglas:
+- Usa SOLO monstruos y runas que aparecen en los datos. Cita cada monstruo como
+  Nombre (idNUMERO) para que se pueda verificar.
+- Si no estás seguro de cuál es el meta actual, dilo en vez de inventar.
+  Si puedes buscar en internet, busca el meta actual de RTA y de Solo R5 y menciona la fuente.
+- Responde en español, claro y sin jerga innecesaria.
+
+Entrega:
+1. RTA: los 12 a 15 monstruos más fuertes para RTA que tiene el jugador, con su rol,
+   qué sets y stats deberían tener, y qué runas actuales están mal para ese rol
+   (ejemplos concretos, y qué runas libres o de otros monstruos usar).
+2. Dos o tres grupos de RTA que hagan sinergia, con el orden de velocidad.
+3. Solo R5: 3 equipos de 6 monstruos (18 distintos, sin repetir), con líder de cada
+   equipo, qué debuffs y roles cubre y qué les falta. Si no se puede armar completo
+   con su caja, dilo y explica qué falta.
+4. Runas para vender o reemplazar: lista concreta (monstruo, slot, set, motivo) de
+   runas equipadas o libres que no aportan a ninguno de los planes anteriores.
+5. Las 5 mejoras de mayor impacto, en orden.
+"""
+
+if st.button("Analizar mi cuenta"):
+    cliente = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+    pedido = {"model": modelo, "instructions": INSTRUCCIONES, "input": texto_final}
+    with st.spinner("Pensando... puede tardar un minuto."):
+        try:
+            if usar_web:
+                try:
+                    resp = cliente.responses.create(
+                        **pedido, tools=[{"type": "web_search"}]
+                    )
+                except Exception:
+                    st.warning("No pude usar la búsqueda web; analizo sin ella.")
+                    resp = cliente.responses.create(**pedido)
+            else:
+                resp = cliente.responses.create(**pedido)
+            st.session_state["respuesta"] = resp.output_text
+            try:
+                st.session_state["uso"] = (
+                    str(resp.usage.input_tokens) + " entrada / "
+                    + str(resp.usage.output_tokens) + " salida"
+                )
+            except Exception:
+                st.session_state["uso"] = "no disponible"
+        except Exception as e:
+            st.error("Error al llamar a OpenAI: " + str(e))
+
+if "respuesta" in st.session_state:
+    respuesta = st.session_state["respuesta"]
+    st.markdown(respuesta)
+    st.caption("Tokens usados: " + st.session_state.get("uso", "?"))
+
+    ids_validos = {str(u.get("unit_id")) for u in unidades}
+    ids_citados = set(re.findall(r"id(\d+)", respuesta))
+    raros = ids_citados - ids_validos
+    if raros:
+        st.warning(
+            "Ojo: la respuesta menciona ids que no están en tu cuenta: "
+            + ", ".join(sorted(raros))
+        )
